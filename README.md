@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🪲 Digger
 
 Discover underground music based on your Spotify listening history. Digger analyzes your taste profile and surfaces artists you've never heard of — but will immediately love.
@@ -97,4 +98,3 @@ Lower these numbers for more obscure results. Note that very low thresholds (< 1
 - **Preview URLs** are provided by Spotify and are 30-second MP3 clips. Not all tracks have them — Spotify has been reducing preview availability, especially outside the US.
 - **Rate limits**: Spotify allows ~180 requests per minute. If you hit a rate limit, the app will display an error with a retry hint.
 - **Token refresh** is handled automatically — the access token is refreshed 5 minutes before it expires.
-# digger
