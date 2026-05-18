@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Digger — Discover Underground Music</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪲</text></svg>" />
+</head>
+<body>
+
+  <!-- ── Landing ─────────────────────────────────────────────── -->
+  <div id="view-landing" class="view hidden">
+    <div class="landing-bg"></div>
+    <div class="landing-content">
+      <div class="brand">
+        <span class="brand-icon">🪲</span>
+        <span class="brand-name">Digger</span>
+      </div>
+      <h1 class="landing-headline">Music discovery for people tired of Spotify recommendations.</h1>
+      <p class="landing-sub">
+        We find underground artists actually matched to your taste.
+      </p>
+      <div id="error-banner" class="error-banner hidden"></div>
+      <a href="/auth/login" class="btn-spotify" id="login-btn">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+        </svg>
+        Connect with Spotify
+      </a>
+      <p class="landing-disclaimer">
+        We request read access to your listening history and permission to create playlists.
+        Nothing is stored — this runs session-only.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── App ──────────────────────────────────────────────────── -->
+  <div id="view-app" class="view hidden">
+
+    <header class="app-header">
+      <div class="header-brand">
+        <span class="brand-icon">🪲</span>
+        <span class="brand-name">Digger</span>
+      </div>
+      <div class="header-user hidden" id="header-user">
+        <img id="user-avatar" class="user-avatar" src="" alt="" />
+        <span id="user-name" class="user-name"></span>
+        <a href="/auth/logout" class="logout-link">Surface</a>
+      </div>
+    </header>
+
+    <!-- Loading state -->
+    <div id="loading-state" class="loading-state">
+      <div class="loading-beetle" id="loading-beetle">🪲</div>
+      <p class="loading-label" id="loading-label">Digging...</p>
+    </div>
+
+    <!-- Main content (hidden until loaded) -->
+    <main id="main-content" class="main-content hidden">
+
+      <!-- Taste profile card -->
+      <section class="section">
+        <h2 class="section-title">Your Sound</h2>
+        <div class="profile-card" id="profile-card">
+          <div class="profile-mood" id="profile-mood"></div>
+          <div class="profile-stats" id="profile-stats"></div>
+          <div class="profile-genres" id="profile-genres"></div>
+          <div class="profile-top-tracks-wrap hidden">
+            <p class="profile-section-label">Your recent favorites</p>
+            <div class="profile-top-tracks" id="profile-top-tracks"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Recommendations -->
+      <section class="section">
+        <div class="recs-header">
+          <div>
+            <h2 class="section-title" id="recs-title">What We Found</h2>
+            <p class="recs-subtitle" id="recs-subtitle"></p>
+          </div>
+          <div class="recs-actions">
+            <button class="btn btn-outline" id="btn-scroll-mode">
+              <span>Scroll Mode</span>
+              <span class="btn-sub">swipe to discover</span>
+            </button>
+            <button class="btn btn-outline" id="btn-dig-deeper">
+              <span id="dig-deeper-label">Go Deeper</span>
+              <span class="btn-sub" id="dig-deeper-sub">≤15 popularity</span>
+            </button>
+            <button class="btn btn-primary" id="btn-save-all">
+              Dig Everything
+            </button>
+          </div>
+        </div>
+
+        <div id="recs-empty" class="recs-empty hidden">
+          <p>Nothing surfaced at this depth. Try coming up for air.</p>
+          <button class="btn btn-outline" id="btn-reset-dig">Reset Filter</button>
+        </div>
+
+        <div id="recs-tiers"></div>
+        <div id="recs-micro" class="hidden"></div>
+      </section>
+
+      <!-- Nerd mode panel -->
+      <div id="debug-wrap" class="debug-wrap hidden">
+        <button id="debug-toggle" class="debug-toggle">🔬 Nerd mode ▾</button>
+        <div id="debug-panel" class="debug-panel" style="display:none"></div>
+      </div>
+
+      <!-- Playlist success toast -->
+      <div id="toast" class="toast hidden">
+        <span id="toast-msg"></span>
+        <a id="toast-link" href="" target="_blank" class="toast-link hidden">Open playlist</a>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ── Scroll Mode overlay ──────────────────────────────── -->
+  <div id="scroll-mode" class="scroll-mode hidden">
+    <div class="scroll-header">
+      <button id="scroll-close" class="scroll-close-btn">✕ Exit</button>
+      <div class="scroll-tally" id="scroll-tally">
+        <span class="tally-likes">❤ 0</span>
+        <span class="tally-dislikes">✕ 0</span>
+      </div>
+      <button id="scroll-refresh" class="scroll-refresh-btn hidden">Refresh ↻</button>
+    </div>
+    <div class="scroll-container" id="scroll-container"></div>
+    <div class="scroll-keyboard-hint" id="scroll-kb-hint">
+      <span>← dislike</span><span>→ like</span><span>+ save</span><span>esc exit</span>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
