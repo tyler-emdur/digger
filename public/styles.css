@@ -386,6 +386,7 @@ button { cursor: pointer; border: none; background: none; font: inherit; color: 
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   padding: 8px 18px;
   border-radius: var(--radius);
   font-size: 0.8rem;
@@ -394,20 +395,67 @@ button { cursor: pointer; border: none; background: none; font: inherit; color: 
   white-space: nowrap;
   font-family: var(--font);
 }
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.btn:focus-visible,
+.dig-mode-btn:focus-visible,
+.btn-track-save:focus-visible,
+.btn-track-open:focus-visible,
+.reaction-btn:focus-visible {
+  outline: 2px solid rgba(29,185,84,0.65);
+  outline-offset: 2px;
+}
 
 .btn-primary {
   background: var(--green);
   color: #000;
 }
-.btn-primary:hover { background: #1ed760; }
-.btn-primary:active { transform: scale(0.97); }
+.btn-primary:hover:not(:disabled) { background: #1ed760; }
+.btn-primary:active:not(:disabled) { transform: scale(0.97); }
 
 .btn-ghost {
   border: 1px solid var(--border-2);
   color: var(--text-muted);
   background: transparent;
 }
-.btn-ghost:hover { border-color: var(--text-dim); color: var(--text); }
+.btn-ghost:hover:not(:disabled) { border-color: var(--text-dim); color: var(--text); }
+
+.dig-tuner {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  margin: -12px 0 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.dig-mode-btn {
+  height: 34px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  transition: background var(--transition), color var(--transition), opacity var(--transition);
+}
+
+.dig-mode-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.dig-mode-btn.active {
+  background: var(--green);
+  color: #000;
+}
+
+.dig-mode-btn:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
 
 .recs-empty {
   text-align: center;
@@ -1366,6 +1414,7 @@ button { cursor: pointer; border: none; background: none; font: inherit; color: 
   .recs-header { flex-direction: column; }
   .recs-actions { width: 100%; }
   .recs-actions .btn { flex: 1; justify-content: center; }
+  .dig-tuner { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .card-blurb { display: none; }
 }
 

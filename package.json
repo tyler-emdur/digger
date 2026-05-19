@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "check": "node --check server.js && node --check routes/api.js && node --check routes/auth.js && node --check public/app.js && node --check lib/algorithm.js && node --check lib/spotify.js && node --check lib/lastfm.js && node --check lib/claude.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

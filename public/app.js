@@ -5,10 +5,31 @@ const $ = id => document.getElementById(id);
 // ── State ─────────────────────────────────────────────────
 const state = {
   recommendations: [],
-  isDeepDig: false,
+  digMode: 'underground',
+  recsRequestId: 0,
+  recsLoading: false,
   currentAudio: null,
   currentPlayBtn: null,
   savedUris: new Set()
+};
+
+const DIG_MODES = {
+  surface: {
+    label: 'Surface',
+    subtitle: 'surface — broader underground filter'
+  },
+  underground: {
+    label: 'Underground',
+    subtitle: 'underground — mainstream filtered out'
+  },
+  'deep-cut': {
+    label: 'Deep Cut',
+    subtitle: 'deep cut — lower listener cap active'
+  },
+  micro: {
+    label: 'Micro',
+    subtitle: 'micro — smallest-scene filter active'
+  }
 };
 
 // ── Routing ───────────────────────────────────────────────
@@ -140,36 +161,43 @@ function renderTopTracks(tracks) {
 const pct = v => `${Math.round(v * 100)}%`;
 
 // ── Recommendations ───────────────────────────────────────
-async function loadRecommendations(deepDig = false) {
-  state.isDeepDig = deepDig;
+async function loadRecommendations(mode = state.digMode) {
+  state.digMode = DIG_MODES[mode] ? mode : 'underground';
+  const requestId = ++state.recsRequestId;
   stopAudio();
 
+  state.recommendations = [];
   $('recs-tiers').innerHTML = '';
   $('recs-micro').innerHTML = '';
   $('recs-micro').classList.add('hidden');
   $('recs-empty').classList.add('hidden');
+  $('recs-empty').querySelector('p').textContent = 'Nothing surfaced at this depth.';
+  setDigModeUI(state.digMode);
   setRecsLoading(true);
 
   let data;
   try {
-    const res = await fetch(`/api/recommendations?deepDig=${deepDig}`);
+    const res = await fetch(`/api/recommendations?mode=${encodeURIComponent(state.digMode)}`);
     if (!res.ok) throw await res.json();
     data = await res.json();
   } catch (err) {
-    showError(err.error || 'Failed to fetch recommendations.');
+    if (requestId !== state.recsRequestId) return;
+    showRecommendationError(err.error || 'Failed to fetch recommendations.');
     setRecsLoading(false);
     return;
   }
 
+  if (requestId !== state.recsRequestId) return;
   setRecsLoading(false);
   state.recommendations = data.recommendations || [];
-  updateRecsHeader(deepDig, data.popularityThreshold);
+  updateRecsHeader(data);
 
   const tiers = data.tiers || [];
   const totalTracks = tiers.reduce((s, t) => s + t.tracks.length, 0);
 
   if (!totalTracks && !data.microUnderground?.length) {
     $('recs-empty').classList.remove('hidden');
+    updateRecommendationActions();
     return;
   }
 
@@ -194,6 +222,7 @@ async function loadRecommendations(deepDig = false) {
 
   attachCardListeners();
   if (data.debugInfo) renderDebugPanel(data.debugInfo, data.tiers);
+  updateRecommendationActions();
 
   // Auto scroll mode on mobile
   if (window.innerWidth < 768 && state.recommendations.length > 0) {
@@ -201,10 +230,29 @@ async function loadRecommendations(deepDig = false) {
   }
 }
 
-function updateRecsHeader(deepDig) {
-  $('recs-subtitle').textContent = deepDig
-    ? 'deep dig — maximum underground filter active'
-    : 'mainstream filtered out — underground only';
+function updateRecsHeader(data = {}) {
+  const mode = data.mode || state.digMode;
+  $('recs-subtitle').textContent = data.modeSubtitle || DIG_MODES[mode]?.subtitle || DIG_MODES.underground.subtitle;
+}
+
+function setDigModeUI(mode = state.digMode) {
+  document.querySelectorAll('.dig-mode-btn').forEach(btn => {
+    const active = btn.dataset.mode === mode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+function setDigControlsLoading(on) {
+  document.querySelectorAll('.dig-mode-btn').forEach(btn => {
+    btn.disabled = on;
+  });
+}
+
+function updateRecommendationActions() {
+  const hasRecs = state.recommendations.length > 0;
+  $('btn-save-all').disabled = state.recsLoading || !hasRecs;
+  $('btn-scroll-mode').disabled = state.recsLoading || !hasRecs;
 }
 
 const LOADING_COPY = [
@@ -214,6 +262,9 @@ const LOADING_COPY = [
 let loadingCopyTimer = null;
 
 function setRecsLoading(on) {
+  state.recsLoading = on;
+  setDigControlsLoading(on);
+  updateRecommendationActions();
   if (on) {
     const skeletons = Array(6).fill(0).map(() => `
       <div class="skeleton-card">
@@ -472,7 +523,7 @@ async function handleCardReaction(btn) {
     const res = await fetch('/api/card-reaction', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, artistName, pillar, listeners })
+      body: JSON.stringify({ action, artistName, pillar, listeners, mode: state.digMode })
     });
     const data = await res.json();
     if (!res.ok) throw data;
@@ -518,7 +569,7 @@ async function handleDNAExpand(btn) {
     const res = await fetch('/api/card-reaction', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'more-like-this', artistName, pillar, listeners: 200000 })
+      body: JSON.stringify({ action: 'more-like-this', artistName, pillar, listeners: 200000, mode: state.digMode })
     });
     const data = await res.json();
     const resultDiv = btn.closest('.scene-dna')?.querySelector('.dna-expand-results');
@@ -697,6 +748,15 @@ function showError(msg) {
     <a href="/auth/logout" style="color:var(--green);margin-top:12px;font-size:0.82rem">Log in again</a>`;
 }
 
+function showRecommendationError(msg) {
+  $('recs-tiers').innerHTML = '';
+  $('recs-micro').innerHTML = '';
+  $('recs-micro').classList.add('hidden');
+  $('recs-empty').classList.remove('hidden');
+  $('recs-empty').querySelector('p').textContent = msg;
+  showToast(msg);
+}
+
 // ── Debug panel ──────────────────────────────────────────
 function renderDebugPanel(info, tiers = []) {
   const panel = $('debug-panel');
@@ -729,6 +789,10 @@ function renderDebugPanel(info, tiers = []) {
     .map(([k, v]) => `<tr><td>${esc(k.replace(/_/g, '/'))}</td><td>${v} slots</td></tr>`)
     .join('');
 
+  const capRows = Object.entries(info.activeCaps || {})
+    .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${Number(v).toLocaleString()} listeners</td></tr>`)
+    .join('');
+
   panel.innerHTML = `
     <div class="debug-section">
       <strong>Seeds</strong>
@@ -741,7 +805,13 @@ function renderDebugPanel(info, tiers = []) {
       `).join('')}
       <p>Wildcard: ${info.wildcardFinal ?? '—'} shown</p>
       <p>Micro-underground: ${info.finalMicro ?? '—'} shown</p>
+      <p>Mode: ${esc(info.modeLabel || info.mode || 'Underground')}</p>
     </div>
+    ${capRows ? `
+    <div class="debug-section">
+      <strong>Active listener caps</strong>
+      <table class="debug-table"><tr><th>Pillar</th><th>Cap</th></tr>${capRows}</table>
+    </div>` : ''}
     ${genreRows ? `
     <div class="debug-section">
       <strong>Listening distribution</strong>
@@ -1021,7 +1091,7 @@ async function scrollRefreshRecs() {
   exitScrollMode();
   setRecsLoading(true);
   $('recs-tiers').innerHTML = '';
-  await loadRecommendations(state.isDeepDig);
+  await loadRecommendations(state.digMode);
   setTimeout(enterScrollMode, 300);
 }
 
@@ -1042,13 +1112,21 @@ function handleScrollKeyboard(e) {
 
 // ── Wire up ───────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  $('btn-reset-dig')?.addEventListener('click', () => loadRecommendations(false));
+  $('btn-reset-dig')?.addEventListener('click', () => loadRecommendations('underground'));
   $('btn-save-all').addEventListener('click', saveAll);
   $('btn-scroll-mode').addEventListener('click', enterScrollMode);
   $('scroll-close').addEventListener('click', exitScrollMode);
   $('scroll-refresh').addEventListener('click', scrollRefreshRecs);
   window.addEventListener('keydown', handleScrollKeyboard);
   window.addEventListener('beforeunload', stopAudio);
+
+  document.querySelectorAll('.dig-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode;
+      if (!DIG_MODES[mode] || mode === state.digMode) return;
+      loadRecommendations(mode);
+    });
+  });
 
   const debugToggle = $('debug-toggle');
   if (debugToggle) {

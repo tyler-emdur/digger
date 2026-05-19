@@ -10,12 +10,126 @@ const {
   generateSpecificBlurb,
   formatListeners,
   checkTagBlocklist,
-  classifyTagsToBucket,
   classifyArtistToPillar,
   ALIAS_BLOCKLIST,
+  NOISE_TAGS,
   CALIBRATION_SEEDS,
   PILLARS
 } = require('../lib/algorithm');
+
+const DIG_MODES = {
+  surface: {
+    label: 'Surface',
+    subtitle: 'surface — broader underground filter',
+    defaultCap: 150000,
+    pillarCaps: { experimental: 250000 },
+    simLimit: 70,
+    fallbackSeedCount: 4,
+    fallbackOwnAlbumLimit: 4,
+    fallbackAlbumCap: 25
+  },
+  underground: {
+    label: 'Underground',
+    subtitle: 'underground — mainstream filtered out',
+    defaultCap: 80000,
+    pillarCaps: { experimental: 150000 },
+    simLimit: 80,
+    fallbackSeedCount: 5,
+    fallbackOwnAlbumLimit: 5,
+    fallbackAlbumCap: 35
+  },
+  'deep-cut': {
+    label: 'Deep Cut',
+    subtitle: 'deep cut — lower listener cap active',
+    defaultCap: 40000,
+    pillarCaps: { experimental: 75000 },
+    simLimit: 100,
+    fallbackSeedCount: 8,
+    fallbackOwnAlbumLimit: 8,
+    fallbackAlbumCap: 60
+  },
+  micro: {
+    label: 'Micro',
+    subtitle: 'micro — smallest-scene filter active',
+    defaultCap: 10000,
+    pillarCaps: { experimental: 25000 },
+    simLimit: 120,
+    fallbackSeedCount: 10,
+    fallbackOwnAlbumLimit: 10,
+    fallbackAlbumCap: 80
+  }
+};
+
+function resolveDigMode(query = {}) {
+  if (query.deepDig === 'true') return 'deep-cut';
+  return DIG_MODES[query.mode] ? query.mode : 'underground';
+}
+
+function modeCaps(mode) {
+  const config = DIG_MODES[mode] || DIG_MODES.underground;
+  return Object.fromEntries(
+    Object.keys(PILLARS).map(pillarId => [
+      pillarId,
+      config.pillarCaps[pillarId] ?? config.defaultCap
+    ])
+  );
+}
+
+function normalizeArtistName(name = '') {
+  return String(name).trim().toLowerCase();
+}
+
+function cleanTags(tags = []) {
+  return tags
+    .map(t => String(t || '').trim().toLowerCase())
+    .filter(t => t && !NOISE_TAGS.has(t));
+}
+
+function rankCandidate(c, listenerCap, userTagWeights) {
+  const tags = cleanTags(c.lfmInfo?.tags || []);
+  const seedCount = c.seedNames?.length || 0;
+  const listeners = Math.max(c.lfmInfo?.listeners || 0, 1);
+  const cap = Math.max(listenerCap || 1, 1);
+
+  let tagScore = 0;
+  const overlappingTags = [];
+  tags.forEach((tag, index) => {
+    const weight = userTagWeights[tag] || 0;
+    if (!weight) return;
+    const positionWeight = Math.max(0.45, 1 - index * 0.08);
+    tagScore += weight * positionWeight;
+    overlappingTags.push(tag);
+  });
+
+  const graphScore = Math.log1p(c.totalMatch || 0) / Math.log1p(Math.max(seedCount, 1));
+  const seedScore = Math.min(seedCount, 4) / 4;
+  const rarityScore = Math.max(0, 1 - Math.log10(listeners) / Math.log10(cap + 10));
+  const fitScore = Math.min(overlappingTags.length, 5) / 5;
+
+  const score =
+    tagScore * 4.0 +
+    fitScore * 1.5 +
+    graphScore * 1.2 +
+    seedScore * 0.9 +
+    rarityScore * 0.6;
+
+  return {
+    ...c,
+    tags,
+    overlappingTags,
+    rankParts: { tagScore, fitScore, graphScore, seedScore, rarityScore },
+    score
+  };
+}
+
+function compareRankedCandidates(a, b) {
+  return (b.score || 0) - (a.score || 0) ||
+    (b.overlappingTags?.length || 0) - (a.overlappingTags?.length || 0) ||
+    (b.seedNames?.length || 0) - (a.seedNames?.length || 0) ||
+    (b.totalMatch || 0) - (a.totalMatch || 0) ||
+    (a.lfmInfo?.listeners || Infinity) - (b.lfmInfo?.listeners || Infinity) ||
+    a.name.localeCompare(b.name);
+}
 
 function requireAuth(req, res, next) {
   if (!req.session.accessToken) return res.status(401).json({ error: 'Not authenticated' });
@@ -326,7 +440,10 @@ async function lastfmRecommendations(req, res) {
   const tasteProfile = req.session.tasteProfile;
   if (!tasteProfile) return res.status(400).json({ error: 'Load your profile first.' });
 
-  const deepDig = req.query.deepDig === 'true';
+  const mode = resolveDigMode(req.query);
+  const modeConfig = DIG_MODES[mode];
+  const activeModeCaps = modeCaps(mode);
+  req.session.digMode = mode;
   const listenedArtistIds = new Set(req.session.listenedArtistIds || []);
   const heardTrackIds     = new Set(req.session.heardTrackIds || []);
   const lfmSeedInfos      = req.session.lfmSeedInfos || {};
@@ -335,14 +452,15 @@ async function lastfmRecommendations(req, res) {
   const tasteCentroid     = req.session.tasteCentroid || {};
 
   // Per-session listener cap overrides set by card reactions
-  const capOverrides    = req.session.pillarListenerCaps || {};
-  const blockedArtists  = new Set((req.session.blockedArtists || []).map(n => n.toLowerCase()));
+  const allCapOverrides = req.session.pillarListenerCaps || {};
+  const capOverrides    = allCapOverrides[mode] || {};
+  const blockedArtists  = new Set((req.session.blockedArtists || []).map(normalizeArtistName));
 
   const rejectedLog = [];
-  const debugStages = { seeds: primarySeedNames, tagProfile: userTagWeights };
+  const debugStages = { seeds: primarySeedNames, tagProfile: userTagWeights, mode, modeLabel: modeConfig.label };
   const seedInfoMap = new Map(Object.entries(lfmSeedInfos));
 
-  const allSeedNamesLower = [...primarySeedNames, ...CALIBRATION_SEEDS].map(n => n.toLowerCase());
+  const allSeedNamesLower = [...primarySeedNames, ...CALIBRATION_SEEDS].map(normalizeArtistName);
 
   // Global dedup for output — prevents same artist in two pillar tiers
   const globalChosen = new Set();
@@ -350,9 +468,9 @@ async function lastfmRecommendations(req, res) {
   // Base exclusion set (seeds are never candidates)
   const EXPERIMENTAL_EXTRA = ['Boards of Canada', 'Autechre', 'Burial', 'Four Tet'];
   const baseExcluded = new Set([
-    ...primarySeedNames.map(n => n.toLowerCase()),
-    ...CALIBRATION_SEEDS.map(n => n.toLowerCase()),
-    ...EXPERIMENTAL_EXTRA.map(n => n.toLowerCase())
+    ...primarySeedNames.map(normalizeArtistName),
+    ...CALIBRATION_SEEDS.map(normalizeArtistName),
+    ...EXPERIMENTAL_EXTRA.map(normalizeArtistName)
   ]);
 
   // ── Classify user's primary seeds into pillars ────────────────────────────
@@ -375,12 +493,6 @@ async function lastfmRecommendations(req, res) {
     return candidates.map((c, i) => ({ ...c, lfmInfo: infos[i] }));
   }
 
-  // Pillars with per-pillar listener caps (A2: experimental cap = 150k)
-  const DEFAULT_CAP = deepDig ? 40000 : 80000;
-  const PILLAR_CAPS = {
-    experimental: deepDig ? 75000 : 150000
-  };
-
   // Tags that gate the introspective pillar (A1)
   const INTROSPECTIVE_GATE = new Set([
     'indie folk', 'folk', 'singer-songwriter', 'bedroom pop', 'lo-fi', 'lo fi',
@@ -398,15 +510,15 @@ async function lastfmRecommendations(req, res) {
   function filterAndScore(enriched, listenerCap, pillarId) {
     return enriched
       .map(c => {
-        const nameLow = c.name.toLowerCase();
+        const nameLow = normalizeArtistName(c.name);
         if (ALIAS_BLOCKLIST.has(nameLow) || blockedArtists.has(nameLow)) {
           rejectedLog.push({ name: c.name, reason: 'Alias / blocked', pillar: pillarId }); return null;
         }
         if (!c.lfmInfo) {
           rejectedLog.push({ name: c.name, reason: 'Not on Last.fm', pillar: pillarId }); return null;
         }
-        const candidateTags = c.lfmInfo.tags || [];
-        const tagAlias = allSeedNamesLower.find(s => candidateTags.some(t => t.toLowerCase().includes(s)));
+        const candidateTags = cleanTags(c.lfmInfo.tags || []);
+        const tagAlias = allSeedNamesLower.find(s => candidateTags.some(t => t.includes(s)));
         if (tagAlias) {
           rejectedLog.push({ name: c.name, reason: `Alias of ${tagAlias}`, pillar: pillarId }); return null;
         }
@@ -417,11 +529,11 @@ async function lastfmRecommendations(req, res) {
 
         // A1: introspective pillar tag gate
         if (pillarId === 'introspective') {
-          const topTag = candidateTags[0]?.toLowerCase();
+          const topTag = candidateTags[0];
           if (INTROSPECTIVE_HARD_REJECT_TOP.has(topTag)) {
             rejectedLog.push({ name: c.name, reason: `Introspective gate: #1 tag is ${topTag}`, pillar: pillarId }); return null;
           }
-          const hasGate = candidateTags.slice(0, 5).some(t => INTROSPECTIVE_GATE.has(t.toLowerCase()));
+          const hasGate = candidateTags.slice(0, 5).some(t => INTROSPECTIVE_GATE.has(t));
           if (!hasGate) {
             rejectedLog.push({ name: c.name, reason: 'Introspective gate: no qualifying tag in top 5', pillar: pillarId }); return null;
           }
@@ -443,100 +555,117 @@ async function lastfmRecommendations(req, res) {
           rejectedLog.push({ name: c.name, reason: `${listeners.toLocaleString()} > cap ${listenerCap.toLocaleString()}`, pillar: pillarId }); return null;
         }
 
-        const overlappingTags = candidateTags.filter(t => (userTagWeights[t] || 0) > 0);
-        const tagScore = candidateTags.reduce((s, t) => s + (userTagWeights[t] || 0), 0);
-        const multiSeedBonus = (c.seedNames?.length || 0) * 0.05;
-        return { ...c, score: tagScore + multiSeedBonus, overlappingTags };
+        return rankCandidate(c, listenerCap, userTagWeights);
       })
       .filter(Boolean)
-      .sort((a, b) => b.score - a.score);
+      .sort(compareRankedCandidates);
   }
 
   // ── Spotify cross-reference ────────────────────────────────────────────────
   async function spotifyXRef(candidates, quota) {
-    const pool = candidates.slice(0, quota + 14);
-    const searches = await Promise.all(
-      pool.map(c =>
-        spotify.searchTracks(token, `artist:"${c.name}"`, 10, 0)
-          .then(tracks => ({ c, tracks }))
-          .catch(() => ({ c, tracks: [] }))
-      )
-    );
-
     const results = [];
-    for (const { c, tracks } of searches) {
-      if (results.length >= quota) break;
-      const nameLow = c.name.toLowerCase();
-      const byArtist = tracks.filter(t => (t.artists || []).some(a => a.name.toLowerCase() === nameLow));
-      const pool2 = byArtist.length ? byArtist : tracks.filter(t =>
-        (t.artists || []).some(a => a.name.toLowerCase().includes(nameLow.split(' ')[0]))
+    const maxSearches = Math.min(candidates.length, Math.max(quota + 18, quota * 8));
+    const batchSize = 10;
+
+    for (let offset = 0; offset < maxSearches && results.length < quota; offset += batchSize) {
+      const batch = candidates.slice(offset, offset + batchSize);
+      const searches = await Promise.all(
+        batch.map(c =>
+          spotify.searchTracks(token, `artist:"${c.name}"`, 10, 0)
+            .then(tracks => ({ c, tracks }))
+            .catch(() => ({ c, tracks: [] }))
+        )
       );
-      if (!pool2.length) { rejectedLog.push({ name: c.name, reason: 'Not found on Spotify', pillar: c.pillar }); continue; }
 
-      let track = pool2.find(t => !heardTrackIds.has(t.id));
-      let deepCut = false;
+      for (const { c, tracks } of searches) {
+        if (results.length >= quota) break;
+        const nameLow = normalizeArtistName(c.name);
+        const firstToken = nameLow.split(' ')[0];
+        const exactArtistTracks = tracks.filter(t =>
+          (t.artists || []).some(a => normalizeArtistName(a.name) === nameLow)
+        );
+        const looseArtistTracks = tracks.filter(t =>
+          (t.artists || []).some(a => normalizeArtistName(a.name).includes(firstToken))
+        );
+        const trackPool = exactArtistTracks.length ? exactArtistTracks : looseArtistTracks;
+        if (!trackPool.length) { rejectedLog.push({ name: c.name, reason: 'Not found on Spotify', pillar: c.pillar }); continue; }
 
-      if (!track) {
-        const sa = pool2[0].artists.find(a => a.name.toLowerCase() === nameLow) || pool2[0].artists[0];
-        if (sa && listenedArtistIds.has(sa.id)) {
-          rejectedLog.push({ name: c.name, reason: 'All tracks heard', pillar: c.pillar }); continue;
+        trackPool.sort((a, b) =>
+          Number(!heardTrackIds.has(b.id)) - Number(!heardTrackIds.has(a.id)) ||
+          Number(!!b.preview_url) - Number(!!a.preview_url) ||
+          (b.popularity || 0) - (a.popularity || 0) ||
+          a.name.localeCompare(b.name)
+        );
+
+        let track = trackPool.find(t => !heardTrackIds.has(t.id));
+        let deepCut = false;
+
+        if (!track) {
+          const sa = trackPool[0].artists.find(a => normalizeArtistName(a.name) === nameLow) || trackPool[0].artists[0];
+          if (sa && listenedArtistIds.has(sa.id)) {
+            rejectedLog.push({ name: c.name, reason: 'All tracks heard', pillar: c.pillar }); continue;
+          }
+          track = trackPool[0];
         }
-        track = pool2[0];
+
+        const spotifyArtist = (track.artists || []).find(a => normalizeArtistName(a.name) === nameLow) || track.artists?.[0];
+        if (!spotifyArtist) { rejectedLog.push({ name: c.name, reason: 'No matching artist', pillar: c.pillar }); continue; }
+        if (globalChosen.has(nameLow)) continue;
+
+        if (listenedArtistIds.has(spotifyArtist.id)) {
+          if (heardTrackIds.has(track.id)) { rejectedLog.push({ name: c.name, reason: 'All tracks heard', pillar: c.pillar }); continue; }
+          deepCut = true;
+        }
+
+        // A6: preview URL chain: track object → getTrack fallback
+        let previewUrl = track.preview_url;
+        if (!previewUrl) {
+          try { const ft = await spotify.getTrack(token, track.id); previewUrl = ft.preview_url || null; } catch {}
+        }
+
+        const candidateTags = c.tags || cleanTags(c.lfmInfo?.tags || []);
+        const lfmImage = c.lfmInfo?.image || null;
+        const albumArt = track.album?.images?.[0]?.url || lfmImage || null;
+        const resolvedSeeds = c.seedNames.filter(s => primarySeedNames.includes(s));
+        const whyBlurb = generateSpecificBlurb(candidateTags, seedInfoMap,
+          resolvedSeeds.length ? resolvedSeeds : c.seedNames.slice(0, 2));
+
+        globalChosen.add(nameLow);
+        results.push({
+          id: track.id, uri: track.uri, name: track.name,
+          artist: c.name, artistId: spotifyArtist.id,
+          album: track.album?.name || '',
+          albumArt,
+          previewUrl: previewUrl || null,
+          popularityLabel: formatListeners(c.lfmInfo?.listeners),
+          spotifyUrl: track.external_urls?.spotify || '',
+          artistSpotifyUrl: spotifyArtist.external_urls?.spotify || '',
+          genres: candidateTags,
+          sceneTag: assignSceneTag(candidateTags),
+          whyBlurb,
+          listeners: c.lfmInfo?.listeners || 0,
+          pillar: c.pillar,
+          score: c.score || 0,
+          rankParts: c.rankParts,
+          deepCut,
+          overlappingTags: c.overlappingTags || [],
+          seedNames: resolvedSeeds.length ? resolvedSeeds : c.seedNames.slice(0, 3) // B4
+        });
       }
-
-      const spotifyArtist = (track.artists || []).find(a => a.name.toLowerCase() === nameLow) || track.artists?.[0];
-      if (!spotifyArtist) { rejectedLog.push({ name: c.name, reason: 'No matching artist', pillar: c.pillar }); continue; }
-      if (globalChosen.has(c.name.toLowerCase())) continue;
-
-      if (listenedArtistIds.has(spotifyArtist.id)) {
-        if (heardTrackIds.has(track.id)) { rejectedLog.push({ name: c.name, reason: 'All tracks heard', pillar: c.pillar }); continue; }
-        deepCut = true;
-      }
-
-      // A6: preview URL chain: track object → getTrack fallback
-      let previewUrl = track.preview_url;
-      if (!previewUrl) {
-        try { const ft = await spotify.getTrack(token, track.id); previewUrl = ft.preview_url || null; } catch {}
-      }
-
-      const candidateTags = c.lfmInfo?.tags || [];
-      const lfmImage = c.lfmInfo?.image || null;
-      const albumArt = track.album?.images?.[0]?.url || lfmImage || null;
-      const resolvedSeeds = c.seedNames.filter(s => primarySeedNames.includes(s));
-      const whyBlurb = generateSpecificBlurb(candidateTags, seedInfoMap,
-        resolvedSeeds.length ? resolvedSeeds : c.seedNames.slice(0, 2));
-
-      globalChosen.add(c.name.toLowerCase());
-      results.push({
-        id: track.id, uri: track.uri, name: track.name,
-        artist: c.name, artistId: spotifyArtist.id,
-        album: track.album?.name || '',
-        albumArt,
-        previewUrl: previewUrl || null,
-        popularityLabel: formatListeners(c.lfmInfo?.listeners),
-        spotifyUrl: track.external_urls?.spotify || '',
-        artistSpotifyUrl: spotifyArtist.external_urls?.spotify || '',
-        genres: candidateTags,
-        sceneTag: assignSceneTag(candidateTags),
-        whyBlurb,
-        listeners: c.lfmInfo?.listeners || 0,
-        pillar: c.pillar,
-        deepCut,
-        overlappingTags: c.overlappingTags || [],
-        seedNames: resolvedSeeds.length ? resolvedSeeds : c.seedNames.slice(0, 3) // B4
-      });
     }
     return results;
   }
 
   // ── Walk each pillar independently ────────────────────────────────────────
-  const SIM_LIMIT = deepDig ? 100 : 80;
+  const SIM_LIMIT = modeConfig.simLimit;
 
   const pillarScoredMap   = {};
   const pillarEnrichedMap = {};
+  const finalCaps = {};
 
   for (const [pillarId, pillar] of Object.entries(PILLARS)) {
-    const listenerCap = capOverrides[pillarId] ?? (PILLAR_CAPS[pillarId] ?? DEFAULT_CAP);
+    const listenerCap = capOverrides[pillarId] ?? activeModeCaps[pillarId];
+    finalCaps[pillarId] = listenerCap;
     const userSeeds   = (userPillarSeeds[pillarId] || []).slice(0, 3);
     const extraSeeds  = pillar.extraSeeds || [];
     const allSeeds    = [...new Set([...userSeeds, ...pillar.calibSeeds, ...extraSeeds])];
@@ -549,18 +678,33 @@ async function lastfmRecommendations(req, res) {
     simResults.forEach((results, si) => {
       const fromName = allSeeds[si];
       (results || []).forEach(({ name, match }) => {
-        const low = name.toLowerCase();
+        const low = normalizeArtistName(name);
         if (excluded.has(low)) return;
-        if (!candidateMap.has(name)) candidateMap.set(name, { name, totalMatch: 0, seedNames: [], pillar: pillarId });
-        const c = candidateMap.get(name);
+        if (!candidateMap.has(low)) {
+          candidateMap.set(low, {
+            name,
+            totalMatch: 0,
+            maxMatch: 0,
+            seedNames: new Set(),
+            pillar: pillarId
+          });
+        }
+        const c = candidateMap.get(low);
         c.totalMatch += match;
-        if (!c.seedNames.includes(fromName)) c.seedNames.push(fromName);
+        c.maxMatch = Math.max(c.maxMatch, match);
+        c.seedNames.add(fromName);
       });
     });
 
     const candidateList = [...candidateMap.values()]
-      .sort((a, b) => b.totalMatch - a.totalMatch)
-      .slice(0, 120);
+      .map(c => ({ ...c, seedNames: [...c.seedNames] }))
+      .sort((a, b) =>
+        b.seedNames.length - a.seedNames.length ||
+        b.totalMatch - a.totalMatch ||
+        b.maxMatch - a.maxMatch ||
+        a.name.localeCompare(b.name)
+      )
+      .slice(0, 140);
 
     debugStages[`${pillarId}Candidates`] = candidateList.length;
 
@@ -584,7 +728,11 @@ async function lastfmRecommendations(req, res) {
   }
   const unexpectedCandidate = [...crossPillarMap.values()]
     .filter(e => e.pillars.length >= 2)
-    .sort((a, b) => b.maxScore - a.maxScore)[0] || null;
+    .sort((a, b) =>
+      b.pillars.length - a.pillars.length ||
+      b.maxScore - a.maxScore ||
+      a.data.name.localeCompare(b.data.name)
+    )[0] || null;
 
   // ── Build per-pillar tiers ─────────────────────────────────────────────────
   const finalTiers = [];
@@ -615,9 +763,9 @@ async function lastfmRecommendations(req, res) {
   // Wildcard tier
   const wildcardPool = [];
   for (const scored of Object.values(pillarScoredMap)) {
-    wildcardPool.push(...scored.filter(c => !globalChosen.has(c.name.toLowerCase())));
+    wildcardPool.push(...scored.filter(c => !globalChosen.has(normalizeArtistName(c.name))));
   }
-  wildcardPool.sort((a, b) => (b.score || 0) - (a.score || 0));
+  wildcardPool.sort(compareRankedCandidates);
   const wildcardTracks = await spotifyXRef(wildcardPool.slice(0, 20), 2);
   wildcardTracks.forEach(t => { t.wildcard = true; });
   if (wildcardTracks.length > 0) {
@@ -632,27 +780,32 @@ async function lastfmRecommendations(req, res) {
       if (!c.lfmInfo) return false;
       const l = c.lfmInfo.listeners;
       return l < 5000 && l >= 10 &&
-        !ALIAS_BLOCKLIST.has(c.name.toLowerCase()) &&
-        !globalChosen.has(c.name.toLowerCase()) &&
-        !blockedArtists.has(c.name.toLowerCase());
+        !ALIAS_BLOCKLIST.has(normalizeArtistName(c.name)) &&
+        !globalChosen.has(normalizeArtistName(c.name)) &&
+        !blockedArtists.has(normalizeArtistName(c.name));
     }).slice(0, 2);
   }
 
   // A3: dedup across pillars by name
   const microSeen = new Set();
   const microCandidates = Object.values(microByPillar).flat().filter(c => {
-    const low = c.name.toLowerCase();
+    const low = normalizeArtistName(c.name);
     if (microSeen.has(low)) return false;
     microSeen.add(low);
     return true;
-  }).sort((a, b) => (a.lfmInfo?.listeners || 0) - (b.lfmInfo?.listeners || 0)).slice(0, 12);
+  }).sort((a, b) =>
+    (a.lfmInfo?.listeners || 0) - (b.lfmInfo?.listeners || 0) ||
+    b.seedNames.length - a.seedNames.length ||
+    b.totalMatch - a.totalMatch ||
+    a.name.localeCompare(b.name)
+  ).slice(0, 12);
 
   const microUnderground = (await Promise.all(
     microCandidates.map(c =>
       spotify.searchTracks(token, `artist:"${c.name}"`, 5, 0)
         .then(tracks => {
-          const nameLow = c.name.toLowerCase();
-          const t = tracks.find(tr => (tr.artists || []).some(a => a.name.toLowerCase() === nameLow)) || null;
+          const nameLow = normalizeArtistName(c.name);
+          const t = tracks.find(tr => (tr.artists || []).some(a => normalizeArtistName(a.name) === nameLow)) || null;
           return {
             name: c.name, listeners: c.lfmInfo?.listeners || 0,
             tags: c.lfmInfo?.tags?.length ? c.lfmInfo.tags : ['tags unavailable'], // A4 fallback
@@ -726,10 +879,15 @@ async function lastfmRecommendations(req, res) {
     mostUnexpectedMatch,
     sceneAnchors,
     recommendations: allTrackRecs,
-    deepDig,
+    mode,
+    modeLabel: modeConfig.label,
+    modeSubtitle: modeConfig.subtitle,
+    activeCaps: finalCaps,
+    deepDig: mode === 'deep-cut',
     popularityThreshold: null,
     debugInfo: {
       ...debugStages,
+      activeCaps: finalCaps,
       rejected: rejectedLog,
       tagProfile: userTagWeights,
       userPillarSeeds
@@ -743,24 +901,26 @@ async function albumTraversalRecommendations(req, res) {
   const tasteProfile = req.session.tasteProfile;
   if (!tasteProfile) return res.status(400).json({ error: 'Load your profile first.' });
 
-  const deepDig = req.query.deepDig === 'true';
+  const mode = resolveDigMode(req.query);
+  const modeConfig = DIG_MODES[mode];
+  req.session.digMode = mode;
   const listenedArtistIds = new Set(req.session.listenedArtistIds || []);
   const userMarket = req.session.userMarket || 'US';
   const seedIds = tasteProfile.topArtistIds || [];
   const seedNames = tasteProfile.topArtistNames || [];
 
-  const primaryIds = seedIds.slice(0, deepDig ? 8 : 5);
-  const albumCap = deepDig ? 60 : 35;
+  const primaryIds = seedIds.slice(0, modeConfig.fallbackSeedCount);
+  const albumCap = modeConfig.fallbackAlbumCap;
 
   const [primaryOwn, primaryOn] = await Promise.all([
     Promise.all(primaryIds.map((id, i) =>
-      spotify.getArtistAlbums(token, id, deepDig ? 8 : 5, userMarket, 'album,single')
-        .then(albums => albums.map(a => ({ album: a, seedName: seedNames[i] || 'your library' })))
+      spotify.getArtistAlbums(token, id, modeConfig.fallbackOwnAlbumLimit, userMarket, 'album,single')
+        .then(albums => albums.map(a => ({ album: a, seedName: seedNames[i] || 'your library', seedRank: i, relationRank: 0 })))
         .catch(() => [])
     )),
     Promise.all(primaryIds.map((id, i) =>
       spotify.getArtistAlbums(token, id, 5, userMarket, 'appears_on')
-        .then(albums => albums.map(a => ({ album: a, seedName: seedNames[i] || 'your library' })))
+        .then(albums => albums.map(a => ({ album: a, seedName: seedNames[i] || 'your library', seedRank: i, relationRank: 1 })))
         .catch(() => [])
     ))
   ]);
@@ -771,19 +931,21 @@ async function albumTraversalRecommendations(req, res) {
       if (seenAlbumIds.has(album.id)) return false;
       seenAlbumIds.add(album.id);
       return true;
-    }).slice(0, albumCap);
+    })
+    .map((item, albumRank) => ({ ...item, albumRank }))
+    .slice(0, albumCap);
 
   const albumTracksResults = await Promise.all(
-    albumsWithSeed.map(({ album, seedName }) =>
+    albumsWithSeed.map(({ album, seedName, seedRank, relationRank, albumRank }) =>
       spotify.getAlbumTracks(token, album.id, 10)
-        .then(tracks => ({ tracks, album, seedName }))
-        .catch(() => ({ tracks: [], album, seedName }))
+        .then(tracks => ({ tracks, album, seedName, seedRank, relationRank, albumRank }))
+        .catch(() => ({ tracks: [], album, seedName, seedRank, relationRank, albumRank }))
     )
   );
 
   const candidateMap = new Map();
-  for (const { tracks, album, seedName } of albumTracksResults) {
-    for (const track of tracks) {
+  for (const { tracks, album, seedName, seedRank, relationRank, albumRank } of albumTracksResults) {
+    tracks.forEach((track, trackRank) => {
       for (const artist of track.artists || []) {
         if (listenedArtistIds.has(artist.id) || candidateMap.has(artist.id)) continue;
         candidateMap.set(artist.id, {
@@ -794,20 +956,39 @@ async function albumTraversalRecommendations(req, res) {
           spotifyUrl: track.external_urls?.spotify || '',
           artistSpotifyUrl: artist.external_urls?.spotify || '',
           genres: [], sceneTag: null,
-          whyBlurb: `Appears on the same record as ${seedName}.`
+          whyBlurb: `Appears on the same record as ${seedName}.`,
+          fallbackRank: seedRank * 1000 + relationRank * 250 + albumRank * 10 + trackRank
         });
       }
-    }
+    });
   }
 
   const recommendations = [...candidateMap.values()]
     .filter(r => r.id && r.uri)
-    .sort(() => Math.random() - 0.5)
+    .sort((a, b) =>
+      a.fallbackRank - b.fallbackRank ||
+      a.artist.localeCompare(b.artist) ||
+      a.name.localeCompare(b.name)
+    )
     .slice(0, 20);
 
+  const fallbackTier = recommendations.length
+    ? [{ id: 'fallback', label: '🎵 Discovered Tracks', subtitle: 'Add LASTFM_API_KEY for genre-filtered underground scoring', tracks: recommendations }]
+    : [];
+
   res.json({
-    recommendations, deepDig, popularityThreshold: null,
+    tiers: fallbackTier,
+    recommendations,
+    mode,
+    modeLabel: modeConfig.label,
+    modeSubtitle: modeConfig.subtitle,
+    activeCaps: modeCaps(mode),
+    deepDig: mode === 'deep-cut',
+    popularityThreshold: null,
     debugInfo: {
+      mode,
+      modeLabel: modeConfig.label,
+      activeCaps: modeCaps(mode),
       note: 'Add LASTFM_API_KEY to .env for genre filtering and proper underground scoring',
       candidateCount: candidateMap.size, finalCount: recommendations.length
     }
@@ -820,8 +1001,12 @@ router.post('/card-reaction', requireAuth, async (req, res) => {
   const { action, artistName, pillar, listeners } = req.body;
   if (!action || !artistName) return res.status(400).json({ error: 'Missing fields' });
 
+  const mode = DIG_MODES[req.body.mode] ? req.body.mode : (req.session.digMode || 'underground');
+  const baseCaps = modeCaps(mode);
   if (!req.session.blockedArtists) req.session.blockedArtists = [];
   if (!req.session.pillarListenerCaps) req.session.pillarListenerCaps = {};
+  if (!req.session.pillarListenerCaps[mode]) req.session.pillarListenerCaps[mode] = {};
+  const modeCapOverrides = req.session.pillarListenerCaps[mode];
 
   switch (action) {
     case 'not-for-me':
@@ -833,22 +1018,20 @@ router.post('/card-reaction', requireAuth, async (req, res) => {
       if (!req.session.blockedArtists.includes(artistName))
         req.session.blockedArtists.push(artistName);
       if (pillar) {
-        const DEFAULT = pillar === 'experimental' ? 150000 : 80000;
-        const current = req.session.pillarListenerCaps[pillar] ?? DEFAULT;
-        req.session.pillarListenerCaps[pillar] = Math.max(10000, current - 15000);
+        const current = modeCapOverrides[pillar] ?? baseCaps[pillar] ?? DIG_MODES.underground.defaultCap;
+        modeCapOverrides[pillar] = Math.max(10000, current - 15000);
       }
-      return res.json({ success: true, newCap: req.session.pillarListenerCaps[pillar] });
+      return res.json({ success: true, mode, newCap: modeCapOverrides[pillar] });
     }
 
     case 'weirder': {
       if (!req.session.blockedArtists.includes(artistName))
         req.session.blockedArtists.push(artistName);
       if (pillar) {
-        const DEFAULT = pillar === 'experimental' ? 150000 : 80000;
-        const current = req.session.pillarListenerCaps[pillar] ?? DEFAULT;
-        req.session.pillarListenerCaps[pillar] = Math.max(5000, current - 20000);
+        const current = modeCapOverrides[pillar] ?? baseCaps[pillar] ?? DIG_MODES.underground.defaultCap;
+        modeCapOverrides[pillar] = Math.max(5000, current - 20000);
       }
-      return res.json({ success: true, newCap: req.session.pillarListenerCaps[pillar] });
+      return res.json({ success: true, mode, newCap: modeCapOverrides[pillar] });
     }
 
     case 'more-like-this': {
@@ -858,24 +1041,26 @@ router.post('/card-reaction', requireAuth, async (req, res) => {
         const heardTrackIds = new Set(req.session.heardTrackIds || []);
         const listenedArtistIds = new Set(req.session.listenedArtistIds || []);
         const userTagWeights = req.session.userTagWeights || {};
-        const blockedArtists = new Set((req.session.blockedArtists || []).map(n => n.toLowerCase()));
+        const blockedArtists = new Set((req.session.blockedArtists || []).map(normalizeArtistName));
 
         const similarRaw = await lastfm.getSimilarArtists(artistName, 40);
-        const known = new Set([...(req.session.listenedArtistIds || [])]);
 
-        const candidates = similarRaw.filter(({ name }) => !blockedArtists.has(name.toLowerCase()));
+        const candidates = similarRaw
+          .filter(({ name }) => !blockedArtists.has(normalizeArtistName(name)))
+          .map(c => ({ ...c, totalMatch: c.match || 0, seedNames: [artistName] }));
         const infos = await Promise.all(candidates.slice(0, 25).map(c => lastfm.getArtistInfoWithCollabFallback(c.name)));
 
-        const cap = listeners ? Math.max(listeners, 10000) : (req.session.pillarListenerCaps?.[pillar] ?? 80000);
+        const cap = listeners
+          ? Math.max(listeners, 10000)
+          : (modeCapOverrides[pillar] ?? baseCaps[pillar] ?? DIG_MODES.underground.defaultCap);
         const scored = candidates
           .map((c, i) => {
             const info = infos[i];
             if (!info || info.listeners > cap || info.listeners < 50) return null;
-            const score = (info.tags || []).reduce((s, t) => s + (userTagWeights[t] || 0), 0);
-            return { ...c, pillar, lfmInfo: info, score, seedNames: [artistName], overlappingTags: [] };
+            return rankCandidate({ ...c, pillar, lfmInfo: info }, cap, userTagWeights);
           })
           .filter(Boolean)
-          .sort((a, b) => b.score - a.score)
+          .sort(compareRankedCandidates)
           .slice(0, 15);
 
         const searches = await Promise.all(
@@ -891,17 +1076,17 @@ router.post('/card-reaction', requireAuth, async (req, res) => {
 
         for (const { c, tracks } of searches) {
           if (results.length >= 3) break;
-          const nameLow = c.name.toLowerCase();
+          const nameLow = normalizeArtistName(c.name);
           if (blockedArtists.has(nameLow)) continue;
-          const byArtist = tracks.filter(t => (t.artists || []).some(a => a.name.toLowerCase() === nameLow));
+          const byArtist = tracks.filter(t => (t.artists || []).some(a => normalizeArtistName(a.name) === nameLow));
           const pool2 = byArtist.length ? byArtist : tracks.slice(0, 3);
           if (!pool2.length) continue;
           const track = pool2.find(t => !heardTrackIds.has(t.id)) || pool2[0];
-          const spotifyArtist = (track.artists || []).find(a => a.name.toLowerCase() === nameLow) || track.artists?.[0];
+          const spotifyArtist = (track.artists || []).find(a => normalizeArtistName(a.name) === nameLow) || track.artists?.[0];
           if (!spotifyArtist) continue;
           let previewUrl = track.preview_url;
           if (!previewUrl) { try { const ft = await spotify.getTrack(token, track.id); previewUrl = ft.preview_url || null; } catch {} }
-          const tags = c.lfmInfo?.tags || [];
+          const tags = c.tags || cleanTags(c.lfmInfo?.tags || []);
           results.push({
             id: track.id, uri: track.uri, name: track.name,
             artist: c.name, artistId: spotifyArtist.id, album: track.album?.name || '',
@@ -913,7 +1098,8 @@ router.post('/card-reaction', requireAuth, async (req, res) => {
             genres: tags, sceneTag: ast(tags),
             whyBlurb: gsb(tags, seedInfoMap, [artistName]),
             listeners: c.lfmInfo?.listeners || 0, pillar, deepCut: false,
-            overlappingTags: [], seedNames: [artistName], expanded: true
+            score: c.score || 0, rankParts: c.rankParts,
+            overlappingTags: c.overlappingTags || [], seedNames: [artistName], expanded: true
           });
         }
         return res.json({ success: true, tracks: results });

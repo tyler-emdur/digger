@@ -4,6 +4,8 @@ node_modules/
 # Environment variables — never commit
 .env
 .env.local
+.env.development
+.env.production
 .env.*.local
 
 # Logs
@@ -27,3 +29,4 @@ build/
 
 # Runtime
 *.pid
+.vercel

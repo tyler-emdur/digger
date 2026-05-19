@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Digger — Discover Underground Music</title>
+  <title>Digger — Underground Music Discovery</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪲</text></svg>" />
 </head>
@@ -13,25 +16,20 @@
   <div id="view-landing" class="view hidden">
     <div class="landing-bg"></div>
     <div class="landing-content">
-      <div class="brand">
-        <span class="brand-icon">🪲</span>
-        <span class="brand-name">Digger</span>
+      <div class="landing-brand">
+        <span class="landing-beetle">🪲</span>
+        <span class="landing-wordmark">Digger</span>
       </div>
-      <h1 class="landing-headline">Music discovery for people tired of Spotify recommendations.</h1>
-      <p class="landing-sub">
-        We find underground artists actually matched to your taste.
-      </p>
+      <h1 class="landing-headline">Music discovery for people tired of the algorithm.</h1>
+      <p class="landing-sub">Underground artists matched to your actual taste. Not what Spotify thinks you want to hear.</p>
       <div id="error-banner" class="error-banner hidden"></div>
       <a href="/auth/login" class="btn-spotify" id="login-btn">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
         </svg>
         Connect with Spotify
       </a>
-      <p class="landing-disclaimer">
-        We request read access to your listening history and permission to create playlists.
-        Nothing is stored — this runs session-only.
-      </p>
+      <p class="landing-disclaimer">Read-only access to your history. Nothing stored — session only.</p>
     </div>
   </div>
 
@@ -40,13 +38,13 @@
 
     <header class="app-header">
       <div class="header-brand">
-        <span class="brand-icon">🪲</span>
-        <span class="brand-name">Digger</span>
+        <span class="header-beetle">🪲</span>
+        <span class="header-wordmark">Digger</span>
       </div>
       <div class="header-user hidden" id="header-user">
         <img id="user-avatar" class="user-avatar" src="" alt="" />
         <span id="user-name" class="user-name"></span>
-        <a href="/auth/logout" class="logout-link">Surface</a>
+        <a href="/auth/logout" class="logout-link">surface</a>
       </div>
     </header>
 
@@ -56,18 +54,18 @@
       <p class="loading-label" id="loading-label">Digging...</p>
     </div>
 
-    <!-- Main content (hidden until loaded) -->
+    <!-- Main content -->
     <main id="main-content" class="main-content hidden">
 
-      <!-- Taste profile card -->
+      <!-- Taste profile -->
       <section class="section">
-        <h2 class="section-title">Your Sound</h2>
+        <h2 class="section-label">Your Sound</h2>
         <div class="profile-card" id="profile-card">
           <div class="profile-mood" id="profile-mood"></div>
           <div class="profile-stats" id="profile-stats"></div>
           <div class="profile-genres" id="profile-genres"></div>
           <div class="profile-top-tracks-wrap hidden">
-            <p class="profile-section-label">Your recent favorites</p>
+            <p class="profile-tracks-label">recent favorites</p>
             <div class="profile-top-tracks" id="profile-top-tracks"></div>
           </div>
         </div>
@@ -77,27 +75,25 @@
       <section class="section">
         <div class="recs-header">
           <div>
-            <h2 class="section-title" id="recs-title">What We Found</h2>
-            <p class="recs-subtitle" id="recs-subtitle"></p>
+            <h2 class="section-label" id="recs-title">What We Found</h2>
+            <p class="recs-subtitle" id="recs-subtitle" aria-live="polite"></p>
           </div>
           <div class="recs-actions">
-            <button class="btn btn-outline" id="btn-scroll-mode">
-              <span>Scroll Mode</span>
-              <span class="btn-sub">swipe to discover</span>
-            </button>
-            <button class="btn btn-outline" id="btn-dig-deeper">
-              <span id="dig-deeper-label">Go Deeper</span>
-              <span class="btn-sub" id="dig-deeper-sub">≤15 popularity</span>
-            </button>
-            <button class="btn btn-primary" id="btn-save-all">
-              Dig Everything
-            </button>
+            <button class="btn btn-ghost" id="btn-scroll-mode">Scroll Mode</button>
+            <button class="btn btn-primary" id="btn-save-all">Save All</button>
           </div>
         </div>
 
+        <div class="dig-tuner" role="group" aria-label="Discovery depth">
+          <button class="dig-mode-btn" type="button" data-mode="surface" aria-pressed="false" title="Broader underground filter">Surface</button>
+          <button class="dig-mode-btn active" type="button" data-mode="underground" aria-pressed="true" title="Default underground filter">Underground</button>
+          <button class="dig-mode-btn" type="button" data-mode="deep-cut" aria-pressed="false" title="Lower listener cap">Deep Cut</button>
+          <button class="dig-mode-btn" type="button" data-mode="micro" aria-pressed="false" title="Smallest-scene filter">Micro</button>
+        </div>
+
         <div id="recs-empty" class="recs-empty hidden">
-          <p>Nothing surfaced at this depth. Try coming up for air.</p>
-          <button class="btn btn-outline" id="btn-reset-dig">Reset Filter</button>
+          <p>Nothing surfaced at this depth.</p>
+          <button class="btn btn-ghost" id="btn-reset-dig">Reset Filter</button>
         </div>
 
         <div id="recs-tiers"></div>
@@ -106,14 +102,14 @@
 
       <!-- Nerd mode panel -->
       <div id="debug-wrap" class="debug-wrap hidden">
-        <button id="debug-toggle" class="debug-toggle">🔬 Nerd mode ▾</button>
+        <button id="debug-toggle" class="debug-toggle">Nerd mode ▾</button>
         <div id="debug-panel" class="debug-panel" style="display:none"></div>
       </div>
 
-      <!-- Playlist success toast -->
+      <!-- Playlist toast -->
       <div id="toast" class="toast hidden">
         <span id="toast-msg"></span>
-        <a id="toast-link" href="" target="_blank" class="toast-link hidden">Open playlist</a>
+        <a id="toast-link" href="" target="_blank" class="toast-link hidden">Open playlist ↗</a>
       </div>
 
     </main>

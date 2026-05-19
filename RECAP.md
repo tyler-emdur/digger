@@ -144,7 +144,7 @@ const state = {
 | Function | What it does |
 |---|---|
 | `loadProfile()` | Fetches /api/profile, renders user + taste panel, then calls loadRecommendations() |
-| `loadRecommendations(deepDig)` | Fetches /api/recommendations, renders scene DNA + unexpected match + tier sections + micro-underground |
+| `loadRecommendations(deepDig)` | Fetches /api/recommendations, renders scene DNA, tier sections, and micro-underground |
 | `trackCardHTML(track)` | Generates the HTML for a single recommendation card |
 | `attachCardListeners()` | Wires up play buttons, save buttons, reaction buttons, tier-title observer, card stagger animation |
 | `toggleCardAudio(btn)` | Click-to-play: plays 30s preview, toggles ▶/■, stops previously playing audio |
@@ -153,37 +153,34 @@ const state = {
 | `enterScrollMode()` | Full-screen swipe mode (auto-enters on mobile < 768px) |
 | `saveTrack(btn)` | POSTs to /api/playlist/track |
 | `saveAll()` | POSTs to /api/playlist with all rec URIs |
-| `renderDebugPanel(info, tiers)` | Renders the "🔬 Nerd mode" panel with pipeline counts, tag profile, rejected artists |
+| `renderDebugPanel(info, tiers)` | Renders the "Nerd mode" panel with pipeline counts, tag profile, rejected artists |
 
 ### Card HTML structure
 ```html
 <div class="track-card" data-id data-uri data-artist data-pillar data-listeners>
-  <div class="recommendation-card">        <!-- max-height: 100px, overflow: hidden -->
+  <div class="card-row">
     <div class="card-art-wrap">            <!-- 56x56px, position: relative -->
-      <div class="art-gradient-fallback">  <!-- always rendered, genre-tinted color -->
-        <span class="art-gradient-initial">A</span>
+      <div class="art-bg">                 <!-- always rendered, genre-tinted fallback -->
+        <span class="art-initial">A</span>
       </div>
       <img class="card-art" onerror="this.style.display='none'" />  <!-- overlays gradient -->
       <button class="card-play-btn">▶</button>                      <!-- if previewUrl -->
       <audio class="track-audio" src="..."></audio>                  <!-- if previewUrl -->
     </div>
-    <div class="card-content">
-      <div class="card-artist">Artist Name</div>
-      <div class="card-track">Track Name</div>
+    <div class="card-body">
+      <div class="card-artist-name">Artist Name</div>
+      <div class="card-track-name">Track Name</div>
       <div class="card-blurb">Why blurb...</div>
-      <div class="track-meta">listener count badge</div>
     </div>
-    <div class="card-side-actions">       <!-- save + open buttons -->
-      <button class="btn-track-save">+ Save</button>
+    <div class="card-actions">             <!-- save + open buttons -->
+      <button class="btn-track-save">+</button>
       <a class="btn-track-open">↗</a>
     </div>
   </div>
-  <!-- shown only when no previewUrl: -->
-  <div class="card-iframe-wrap">
-    <iframe src="https://open.spotify.com/embed/track/ID..." height="52"></iframe>
-  </div>
-  <div class="card-reactions">            <!-- 4 borderless reaction buttons -->
-    👍 More | 📻 Mainstream | 🌀 Weirder | 💔 Nope
+  <div class="card-reactions-wrap">
+    <div class="card-reactions">
+      more like this | too mainstream | go weirder | not for me
+    </div>
   </div>
   <div class="expand-results hidden"></div>  <!-- inline expansion for "More like this" -->
 </div>
@@ -214,7 +211,7 @@ const state = {
 - Touch swipe gestures: right=like, left=dislike
 - AI blurbs via claude-haiku-4-5-20251001 (falls back to template if no API key)
 - Save single track or all tracks to Spotify playlist
-- "🔬 Nerd mode" debug panel
+- "Nerd mode" debug panel
 - Staggered card fade-in animation (60ms per card)
 - Tier section title slide-in via IntersectionObserver
 - Micro-underground section: distinct dark/noisy/monospace visual with glow pulse
