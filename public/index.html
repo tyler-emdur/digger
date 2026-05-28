@@ -38,19 +38,19 @@
 
     <header class="app-header">
       <div class="header-brand">
-        <span class="header-beetle">🪲</span>
+        <span class="header-beetle" aria-hidden="true">🪲</span>
         <span class="header-wordmark">Digger</span>
       </div>
       <div class="header-user hidden" id="header-user">
         <img id="user-avatar" class="user-avatar" src="" alt="" />
         <span id="user-name" class="user-name"></span>
-        <a href="/auth/logout" class="logout-link">surface</a>
+        <a href="/auth/logout" class="logout-link" title="Surface and log out of your Spotify session" aria-label="Surface and log out">surface</a>
       </div>
     </header>
 
     <!-- Loading state -->
-    <div id="loading-state" class="loading-state">
-      <div class="loading-beetle" id="loading-beetle">🪲</div>
+    <div id="loading-state" class="loading-state" role="status" aria-live="polite">
+      <div class="loading-beetle" id="loading-beetle" aria-hidden="true">🪲</div>
       <p class="loading-label" id="loading-label">Digging...</p>
     </div>
 
@@ -79,8 +79,9 @@
             <p class="recs-subtitle" id="recs-subtitle" aria-live="polite"></p>
           </div>
           <div class="recs-actions">
-            <button class="btn btn-ghost" id="btn-scroll-mode">Scroll Mode</button>
-            <button class="btn btn-primary" id="btn-save-all">Save All</button>
+            <button class="btn btn-ghost" id="btn-scroll-mode" title="Enter immersive full-screen swipe mode (Arrow keys supported)" aria-label="Enter Scroll Mode">Scroll Mode</button>
+            <button class="btn btn-ghost" id="btn-dig-again" title="Dig again to find new recommendations at this depth" aria-label="Dig Again">↻ Dig Again</button>
+            <button class="btn btn-primary" id="btn-save-all" title="Save all emerged recommendations to a new Spotify playlist" aria-label="Save All emerged tracks">Save All</button>
           </div>
         </div>
 

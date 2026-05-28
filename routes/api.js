@@ -425,6 +425,9 @@ router.get('/recs-debug', requireAuth, async (req, res) => {
 
 router.get('/recommendations', requireAuth, async (req, res) => {
   try {
+    if (!req.session.tasteProfile) {
+      return res.status(400).json({ error: 'profile_expired' });
+    }
     if (process.env.LASTFM_API_KEY) {
       return await lastfmRecommendations(req, res);
     }
@@ -1131,7 +1134,7 @@ router.post('/feedback', requireAuth, (req, res) => {
   res.json({ success: true, counts: req.session.feedbackCounts });
 });
 
-// Save all shown tracks to a new playlist
+// Save all shown tracks — reuses the session playlist so individual + bulk saves land together
 router.post('/playlist', requireAuth, async (req, res) => {
   try {
     const { trackUris, name } = req.body;
@@ -1141,16 +1144,19 @@ router.post('/playlist', requireAuth, async (req, res) => {
     const userId = req.session.userId;
     if (!userId) return res.status(400).json({ error: 'User ID missing — load profile first.' });
 
-    const date = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    const playlistName = name || `Digger Finds – ${date}`;
+    if (!req.session.currentPlaylistId) {
+      const date = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      const playlistName = name || `Digger Finds – ${date}`;
+      const playlist = await spotify.createPlaylist(
+        token, userId, playlistName,
+        'Underground discoveries curated by Digger 🪲'
+      );
+      req.session.currentPlaylistId = playlist.id;
+      req.session.currentPlaylistUrl = playlist.external_urls.spotify;
+    }
 
-    const playlist = await spotify.createPlaylist(
-      token, userId, playlistName,
-      'Underground discoveries curated by Digger 🪲'
-    );
-    await spotify.addTracksToPlaylist(token, playlist.id, trackUris);
-
-    res.json({ success: true, playlistUrl: playlist.external_urls.spotify });
+    await spotify.addTracksToPlaylist(token, req.session.currentPlaylistId, trackUris);
+    res.json({ success: true, playlistUrl: req.session.currentPlaylistUrl });
   } catch (err) {
     handleSpotifyError(err, res);
   }

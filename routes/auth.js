@@ -11,6 +11,7 @@ const REDIRECT_URI = process.env.REDIRECT_URI || 'http://localhost:3000/auth/cal
 const SCOPES = [
   'user-top-read',
   'user-read-recently-played',
+  'user-library-read',
   'playlist-modify-public',
   'user-read-private'
 ].join(' ');
@@ -59,7 +60,7 @@ router.get('/callback', async (req, res) => {
     req.session.tokenExpiry = Date.now() + expires_in * 1000;
     delete req.session.authState;
 
-    res.redirect('/app');
+    res.redirect('/');
   } catch (err) {
     console.error('Token exchange failed:', err.response?.data || err.message);
     res.redirect('/?error=token_exchange_failed');

@@ -30,3 +30,6 @@ build/
 # Runtime
 *.pid
 .vercel
+
+# Claude Code
+.claude/

@@ -77,6 +77,17 @@ function friendlyError(code) {
   return map[code] || 'Something went wrong. Please try again.';
 }
 
+function handle401(err) {
+  if (!err) return false;
+  const msg = typeof err === 'string' ? err : (err.error || '');
+  if (msg === 'Not authenticated' || msg.includes('log in again')) {
+    showToast('Session expired — logging back in…');
+    setTimeout(() => { window.location.href = '/auth/login'; }, 2200);
+    return true;
+  }
+  return false;
+}
+
 // ── Profile load ──────────────────────────────────────────
 async function loadProfile() {
   setLoading('Digging into your Spotify history…');
@@ -161,7 +172,7 @@ function renderTopTracks(tracks) {
 const pct = v => `${Math.round(v * 100)}%`;
 
 // ── Recommendations ───────────────────────────────────────
-async function loadRecommendations(mode = state.digMode) {
+async function loadRecommendations(mode = state.digMode, isRetry = false) {
   state.digMode = DIG_MODES[mode] ? mode : 'underground';
   const requestId = ++state.recsRequestId;
   stopAudio();
@@ -178,10 +189,20 @@ async function loadRecommendations(mode = state.digMode) {
   let data;
   try {
     const res = await fetch(`/api/recommendations?mode=${encodeURIComponent(state.digMode)}`);
-    if (!res.ok) throw await res.json();
+    if (!res.ok) {
+      const errData = await res.json();
+      if (res.status === 401) { handle401(errData); return; }
+      if (errData.error === 'profile_expired' && !isRetry) {
+        $('recs-subtitle').textContent = 'Re-connecting…';
+        await fetch('/api/profile');
+        return loadRecommendations(mode, true);
+      }
+      throw errData;
+    }
     data = await res.json();
   } catch (err) {
     if (requestId !== state.recsRequestId) return;
+    if (handle401(err)) return;
     showRecommendationError(err.error || 'Failed to fetch recommendations.');
     setRecsLoading(false);
     return;
@@ -203,6 +224,10 @@ async function loadRecommendations(mode = state.digMode) {
 
   let html = '';
 
+  if (data.mostUnexpectedMatch) {
+    html += unexpectedMatchHTML(data.mostUnexpectedMatch);
+  }
+
   // Scene DNA strip
   if (data.sceneAnchors?.length) {
     html += sceneDNAHTML(data.sceneAnchors);
@@ -223,11 +248,6 @@ async function loadRecommendations(mode = state.digMode) {
   attachCardListeners();
   if (data.debugInfo) renderDebugPanel(data.debugInfo, data.tiers);
   updateRecommendationActions();
-
-  // Auto scroll mode on mobile
-  if (window.innerWidth < 768 && state.recommendations.length > 0) {
-    setTimeout(enterScrollMode, 500);
-  }
 }
 
 function updateRecsHeader(data = {}) {
@@ -253,6 +273,7 @@ function updateRecommendationActions() {
   const hasRecs = state.recommendations.length > 0;
   $('btn-save-all').disabled = state.recsLoading || !hasRecs;
   $('btn-scroll-mode').disabled = state.recsLoading || !hasRecs;
+  $('btn-dig-again').disabled = state.recsLoading;
 }
 
 const LOADING_COPY = [
@@ -319,6 +340,28 @@ function microUndergroundHTML(artists) {
       <p class="tier-subtitle">under 5k listeners — so deep they might not have a Wikipedia page yet</p>
       <div class="micro-grid">
         ${artists.map(a => microArtistHTML(a)).join('')}
+      </div>
+    </div>`;
+}
+
+// Unexpected match (cross-pillar bridge artist)
+function unexpectedMatchHTML(match) {
+  const pillarLabels = {
+    introspective: 'introspective', rock: 'rock',
+    experimental: 'experimental', electronic: 'electronic',
+    hiphop: 'hip-hop', wildcard: 'wildcard'
+  };
+  const p1 = pillarLabels[match.pillars?.[0]] || (match.pillars?.[0] || '');
+  const p2 = pillarLabels[match.pillars?.[1]] || (match.pillars?.[1] || '');
+  const bridgeStr = p1 && p2 ? `${esc(p1)} × ${esc(p2)}` : '';
+  return `
+    <div class="unexpected-banner">
+      <div class="unexpected-header">
+        <span class="unexpected-label">⚡ unexpected match</span>
+        ${bridgeStr ? `<span class="unexpected-bridge">${bridgeStr}</span>` : ''}
+      </div>
+      <div class="recs-grid">
+        ${trackCardHTML(match.track)}
       </div>
     </div>`;
 }
@@ -496,9 +539,15 @@ function attachCardListeners() {
     btn.addEventListener('click', () => handleDNAExpand(btn));
   });
 
-  // Tier title intersection animation
+  // Tier title intersection animation — mark immediately if already in viewport
   document.querySelectorAll('.tier-title').forEach(el => {
-    if (!el.classList.contains('visible')) tierTitleObserver.observe(el);
+    if (el.classList.contains('visible')) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.top >= 0 && rect.bottom <= window.innerHeight) {
+      el.classList.add('visible');
+    } else {
+      tierTitleObserver.observe(el);
+    }
   });
 
   // Stagger card entrance animation
@@ -666,6 +715,7 @@ async function saveTrack(btn) {
     markSaved(btn);
     showToast('Saved to your Digger playlist', data.playlistUrl);
   } catch (err) {
+    if (handle401(err)) return;
     btn.textContent = '+';
     btn.disabled = false;
     showToast(err.error || 'Failed to save track');
@@ -700,9 +750,10 @@ async function saveAll() {
     state.recommendations.forEach(t => state.savedUris.add(t.uri));
     document.querySelectorAll('.btn-track-save').forEach(markSaved);
 
-    showToast(`Playlist created — ${trackUris.length} tracks`, data.playlistUrl);
+    showToast(`Saved ${trackUris.length} tracks to playlist`, data.playlistUrl);
     btn.textContent = '✓ Saved';
   } catch (err) {
+    if (handle401(err)) return;
     showToast(err.error || 'Failed to create playlist');
     btn.textContent = original;
     btn.disabled = false;
@@ -853,6 +904,9 @@ function enterScrollMode() {
   const tracks = state.recommendations.filter(t => t.id && t.uri);
   if (!tracks.length) { showToast('Load recommendations first'); return; }
 
+  // Save the scroll position of the main window before hiding it
+  scrollState.savedScrollY = window.scrollY;
+
   scrollState.likes = 0;
   scrollState.dislikes = 0;
   updateScrollTally();
@@ -860,6 +914,10 @@ function enterScrollMode() {
   $('scroll-container').innerHTML = tracks.map(scrollCardHTML).join('');
   $('scroll-mode').classList.remove('hidden');
   $('scroll-refresh').classList.add('hidden');
+  
+  // Hide main view to completely avoid double-rendering / heavy reflows
+  $('view-app').classList.add('hidden');
+  
   document.body.style.overflow = 'hidden';
 
   attachScrollListeners();
@@ -870,6 +928,15 @@ function enterScrollMode() {
 function exitScrollMode() {
   $('scroll-mode').classList.add('hidden');
   document.body.style.overflow = '';
+  
+  // Restore main view
+  $('view-app').classList.remove('hidden');
+  
+  // Restore scroll position
+  if (typeof scrollState.savedScrollY === 'number') {
+    window.scrollTo(0, scrollState.savedScrollY);
+  }
+
   if (scrollState.activeAudio) {
     scrollState.activeAudio.pause();
     scrollState.activeAudio.currentTime = 0;
@@ -902,12 +969,7 @@ function scrollCardHTML(track) {
         : '<div class="sc-art-wrap sc-art-blank"></div>'}
       ${track.previewUrl
         ? `<audio class="sc-audio" src="${esc(track.previewUrl)}" preload="metadata"></audio>`
-        : `<div class="sc-no-preview">
-             <iframe src="https://open.spotify.com/embed/track/${esc(track.id)}?utm_source=generator&theme=0"
-               width="100%" height="80" frameborder="0" class="sc-iframe"
-               allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-               loading="lazy"></iframe>
-           </div>`}
+        : ''}
       <div class="sc-gradient"></div>
       <div class="sc-progress"><div class="sc-progress-fill"></div></div>
 
@@ -1115,6 +1177,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-reset-dig')?.addEventListener('click', () => loadRecommendations('underground'));
   $('btn-save-all').addEventListener('click', saveAll);
   $('btn-scroll-mode').addEventListener('click', enterScrollMode);
+  $('btn-dig-again').addEventListener('click', () => loadRecommendations(state.digMode));
   $('scroll-close').addEventListener('click', exitScrollMode);
   $('scroll-refresh').addEventListener('click', scrollRefreshRecs);
   window.addEventListener('keydown', handleScrollKeyboard);
